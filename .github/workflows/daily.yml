@@ -1,0 +1,56 @@
+name: 매일 지원금 갱신
+
+on:
+  schedule:
+    - cron: '0 22 * * *' # 한국시간 매일 오전 7시
+  workflow_dispatch: # 수동 실행 버튼
+  push:
+    branches: [main]
+    paths-ignore: ['data/**']
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: daily
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 테스트
+        run: node --test
+
+      - name: 공공데이터에서 지원금 받기
+        if: github.event_name != 'push'
+        env:
+          DATA_GO_KR_KEY: ${{ secrets.DATA_GO_KR_KEY }}
+        run: node scripts/fetch-benefits.mjs
+
+      - name: 데이터 저장 (커밋)
+        if: github.event_name != 'push'
+        run: |
+          git config user.name "subsidy-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/benefits.json
+          git diff --cached --quiet || git commit -m "data: $(TZ=Asia/Seoul date +%F) 지원금 갱신"
+          git pull --rebase origin main && git push
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+      - id: deploy
+        uses: actions/deploy-pages@v4

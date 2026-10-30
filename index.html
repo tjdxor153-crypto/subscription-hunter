@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>구독료 사냥</title>
+  <meta name="description" content="오늘 챙길 지원금, 출석체크, 체험단을 한 곳에서">
+  <meta name="theme-color" content="#2f6f4e">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top">
+    <h1>🏹 구독료 사냥</h1>
+    <p id="updated" class="muted small"></p>
+  </header>
+
+  <main>
+    <section id="tab-brief" class="tab" data-tab="brief"></section>
+    <section id="tab-benefits" class="tab" data-tab="benefits" hidden></section>
+    <section id="tab-attend" class="tab" data-tab="attend" hidden></section>
+    <section id="tab-camp" class="tab" data-tab="camp" hidden></section>
+    <section id="tab-me" class="tab" data-tab="me" hidden></section>
+  </main>
+
+  <nav class="tabbar" aria-label="메뉴">
+    <button data-go="brief" aria-current="page"><span>☀️</span>브리핑</button>
+    <button data-go="benefits"><span>📮</span>지원금</button>
+    <button data-go="attend"><span>✅</span>출석</button>
+    <button data-go="camp"><span>📰</span>체험단</button>
+    <button data-go="me"><span>👤</span>내 조건</button>
+  </nav>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
