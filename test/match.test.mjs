@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { matchItem, rankBenefits, parseDeadline, parseAgency, sidoOf, isNew, daysLeft } from '../lib/match.js';
-import { buildItems } from '../scripts/fetch-benefits.mjs';
+import { buildItems, tagLocalAgencies } from '../scripts/fetch-benefits.mjs';
 
 const TODAY = new Date('2026-10-31T09:00:00+09:00');
 const sample = JSON.parse(readFileSync(new URL('./fixtures/sample.json', import.meta.url), 'utf8'));
@@ -178,4 +178,49 @@ test('데이터 용량 줄이기: 빈 값과 기본 주소는 빼요', () => {
   const [x] = buildItems([{ 서비스ID: 'Z', 서비스명: 'z', 지원대상: '가'.repeat(300), 사용자구분: '개인' }], [], new Map(), '2026-10-31');
   assert.ok(x.tg.length <= 101);
   assert.ok(matchItem(x, {}, TODAY).ok);
+});
+
+test('실제 소관기관유형(시군구·광역시도·교육청)은 지역 한정이에요', () => {
+  const seoul = { birthYear: '1990', sido: '서울', sigungu: '강남구' };
+  assert.equal(ok(mk({ org: '부산광역시 해운대구', ot: '시군구' }), seoul).ok, false);
+  assert.equal(ok(mk({ org: '서울특별시 종로구', ot: '시군구' }), seoul).ok, false);
+  assert.ok(ok(mk({ org: '서울특별시 강남구', ot: '시군구' }), seoul).ok);
+  assert.equal(ok(mk({ org: '세종특별자치시', ot: '광역시도' }), seoul).ok, false);
+  assert.ok(ok(mk({ org: '서울특별시', ot: '광역시도' }), seoul).ok);
+  assert.equal(ok(mk({ org: '경기도교육청', ot: '교육청' }), seoul).ok, false);
+  assert.ok(ok(mk({ org: '국세청', ot: '중앙행정기관' }), seoul).ok);
+});
+
+test('지방공기업·재단은 이름에서 시군구를 찾아 구분해요', () => {
+  const items = [
+    mk({ id: 'g1', org: '서울특별시 강남구', ot: '시군구' }),
+    mk({ id: 'g2', org: '서울특별시 서대문구', ot: '시군구' }),
+    mk({ id: 'g3', org: '강원특별자치도 춘천시', ot: '시군구' }),
+    mk({ id: 'g4', org: '대구광역시 달성군', ot: '시군구' }),
+    mk({ id: 'g5', org: '부산광역시 강서구', ot: '시군구' }),
+    mk({ id: 'g6', org: '부산광역시 서구', ot: '시군구' }),
+    mk({ id: 'l1', org: '서울특별시서대문구도시관리공단', ot: '지방공기업' }),
+    mk({ id: 'l2', org: '춘천도시공사', ot: '지방공기업' }),
+    mk({ id: 'l3', org: '(재)달성교육재단', ot: '지방출자_출연기관' }),
+    mk({ id: 'l4', org: '서울시설공단', ot: '지방공기업' }),
+    mk({ id: 'l5', org: '부산광역시강서구시설관리공단', ot: '지방공기업' }),
+  ];
+  tagLocalAgencies(items);
+  const rg = Object.fromEntries(items.filter((i) => i.rg).map((i) => [i.id, i.rg]));
+  assert.deepEqual(rg.l1, ['서울', '서대문구']);
+  assert.deepEqual(rg.l2, ['강원', '춘천시']);
+  assert.deepEqual(rg.l3, ['대구', '달성군']);
+  assert.deepEqual(rg.l4, ['서울']);
+  assert.deepEqual(rg.l5, ['부산', '강서구']); // '서구'가 아니라 '강서구'
+  const gangnam = { birthYear: '1990', sido: '서울', sigungu: '강남구' };
+  const byId = (id) => items.find((i) => i.id === id);
+  assert.equal(ok(byId('l1'), gangnam).ok, false); // 다른 구의 공단은 빠져요
+  assert.ok(ok(byId('l4'), gangnam).ok); // 서울시 전체 공단은 나와요
+  assert.equal(ok(byId('l2'), gangnam).ok, false);
+});
+
+test('지역을 못 찾은 지역 기관은 이름에 내 지역이 있을 때만 보여요', () => {
+  const p = { birthYear: '1990', sido: '경남', sigungu: '고성군' };
+  assert.ok(ok(mk({ org: '재단법인고성교육재단', ot: '지방출자_출연기관' }), p).ok);
+  assert.equal(ok(mk({ org: '재단법인고성교육재단', ot: '지방출자_출연기관' }), { birthYear: '1990', sido: '서울', sigungu: '강남구' }).ok, false);
 });

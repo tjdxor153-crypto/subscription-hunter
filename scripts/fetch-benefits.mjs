@@ -4,7 +4,7 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { isoDate, parseDeadline } from '../lib/match.js';
+import { isoDate, parseDeadline, parseAgency, sidoOf, SIDO } from '../lib/match.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const OUT = path.join(ROOT, 'data', 'benefits.json');
@@ -100,7 +100,36 @@ export function buildItems(list, conditions, prevFirstSeen, today) {
       a: cond.age,
     }));
   }
+  tagLocalAgencies(items);
   return items;
+}
+
+// 지방공기업·출연기관은 이름에서 지역을 찾아 rg: [시·도, 시군구]로 저장해요.
+// 실제 시군구 이름 목록은 같은 데이터의 '시군구' 기관에서 모아요 (예: '서울특별시서대문구도시관리공단' → ['서울', '서대문구'])
+export function tagLocalAgencies(items) {
+  const known = new Map(); // 시군구 이름 → 시·도 목록
+  for (const it of items) {
+    if (!/시군구/.test(it.ot || '')) continue;
+    const ag = parseAgency(it.org);
+    for (const g of ag.sigungu) {
+      if (!known.has(g)) known.set(g, new Set());
+      known.get(g).add(ag.sido);
+    }
+  }
+  const names = [...known.keys()].sort((a, b) => b.length - a.length); // 긴 이름 먼저 ('강서구'가 '서구'보다 먼저)
+  for (const it of items) {
+    if (!/지방공기업|지방출자|출연기관/.test(it.ot || '')) continue;
+    const org = String(it.org || '').replace(/^재단법인|^\(재\)|^사단법인/, '').trim();
+    let sido = sidoOf(org);
+    const fits = (n) => !sido || known.get(n).has(sido);
+    // 시·도 이름을 뗀 나머지가 '춘천도시공사'처럼 시군구 이름(끝 글자 빼고)으로 시작하는 경우도 찾아요
+    const alias = sido ? SIDO.find((s) => s.name === sido).aliases.find((a) => org.startsWith(a)) : '';
+    const rest = org.slice(alias.length).trim();
+    const gu = names.find((n) => org.includes(n) && fits(n))
+      || names.find((n) => n.length >= 3 && rest.startsWith(n.slice(0, -1)) && fits(n)) || null;
+    if (!sido && gu && known.get(gu).size === 1) sido = [...known.get(gu)][0];
+    if (sido) it.rg = gu ? [sido, gu] : [sido];
+  }
 }
 
 const defaultUrl = (id) => `https://www.gov.kr/portal/rcvfvrSvc/dtlEx/${id}`;
