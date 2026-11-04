@@ -309,7 +309,7 @@ test('마감일: 기준일 문구는 빼고, 연도 없는 끝 날짜를 읽어�
   assert.equal(parseDeadline('장해판정일로부터 3년 이내(2021.2.1. 이후)'), null);
   assert.equal(parseDeadline('2026. 3. 2. ~ 2027. 3. 1. 기간 중 사고발생일로부터 3년 이내 청구'), null);
   assert.equal(parseDeadline('2026.10.01 ~ 2026.11.7'), '2026-11-07');
-  assert.equal(parseDeadline('2026.10.01 ~ 13.40'), '2026-10-01'); // 말이 안 되는 날짜는 무시
+  assert.equal(parseDeadline('2026.10.01 ~ 13.40'), null); // 말이 안 되는 끝 날짜는 끝 날짜가 없는 셈이에요
   assert.equal(parseDeadline('2026.3.2 14:00까지'), '2026-03-02');
   // 잘린 문구에 날짜만 남아도 원문 기준(마감일 없음)을 따라요
   const long = '2026. 3. 2. ~ 2026. 3. 9. 기간 중 ' + '발생한 사고에 대하여 '.repeat(8) + '사고일로부터 3년 이내 청구';
@@ -372,4 +372,38 @@ test('사용자구분: 법인·단체와 같이 쓰는 서비스는 점수만 �
   assert.equal(mixed.score, base.score - 10);
   assert.equal(ok(mk({}), {}).score, base.score); // 옛 데이터(u 없음)는 그대로
   assert.equal(ok(it, {}).score, base.score - 10);
+});
+
+test('마감일: 시작일만 있으면 마감일이 아니에요', () => {
+  for (const t of [
+    '2026.1.2. ~ 예산 소진시까지',
+    '2026. 10. 1. 부터 예산 소진시까지',
+    '2025.01.23.~',
+    '2026.3.2.(월) 09:00부터',
+    '2026.3.2.(목). 09시 ~ 예산 소진시',
+    '2026년 3월 2일부터 상시',
+    '2026.3.2 ~ 30일간',
+    '2026.3.20 ~ 5일',
+  ]) assert.equal(parseDeadline(t), null, t);
+
+  // 끝 날짜를 여러 모양으로 적어도 읽어요
+  assert.equal(parseDeadline('2026.3.2. 09시 ~ 4.14. 18시'), '2026-04-14');
+  assert.equal(parseDeadline('2026.3.5.(목).~4.14'), '2026-04-14');
+  assert.equal(parseDeadline('2026.3.2~.4.14'), '2026-04-14');
+  assert.equal(parseDeadline('2026.3.2 ~ 30일'), '2026-03-30');
+  assert.equal(parseDeadline('2026년 3월 2일 09:00 ~ 30일'), '2026-03-30');
+  assert.equal(parseDeadline('2026.3.2부터 4.14까지'), '2026-04-14');
+  assert.equal(parseDeadline('2026.11.1 - 2.28'), '2027-02-28');
+  assert.equal(parseDeadline('2025-04-03~06-30, 2025-08-01~08-31'), '2025-08-31');
+
+  // 날짜 하나만 있으면 그대로 마감일이에요
+  assert.equal(parseDeadline('2026.12.31'), '2026-12-31');
+  assert.equal(parseDeadline('~ 2026.11.07'), '2026-11-07');
+  assert.equal(parseDeadline('2026.12.31까지'), '2026-12-31');
+  assert.equal(parseDeadline('2026.12.31 18:00까지'), '2026-12-31');
+  assert.equal(parseDeadline('2026.12.31 - 예산 소진시 조기 마감'), '2026-12-31');
+
+  // 날짜가 둘이면 뒤의 날짜예요
+  assert.equal(parseDeadline('2026.1.1 ~ 2026.12.31'), '2026-12-31');
+  assert.equal(parseDeadline('2026.1.1.부터 2026.12.31.까지'), '2026-12-31');
 });
