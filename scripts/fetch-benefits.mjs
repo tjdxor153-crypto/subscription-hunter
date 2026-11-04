@@ -1,13 +1,14 @@
-// 매일 아침 공공데이터에서 지원금 목록을 받아 data/benefits.json으로 저장해요.
+// 매일 아침 공공데이터에서 지원금 목록을 받아 data/benefits.json과 data/meta.json으로 저장해요.
 // 사용법: DATA_GO_KR_KEY=인증키 node scripts/fetch-benefits.mjs
 //        (키가 없으면 test/fixtures/sample.json 샘플 데이터로 만들어요)
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { isoDate, parseDeadline, parseAgency, sidoOf, SIDO } from '../lib/match.js';
+import { isoDate, parseDeadline, parseAgency, sidoOf, sidoFits, sidoAliasesOf } from '../lib/match.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const OUT = path.join(ROOT, 'data', 'benefits.json');
+const DATA_DIR = path.join(ROOT, 'data');
+const OUT = path.join(DATA_DIR, 'benefits.json');
 const BASE = 'https://api.odcloud.kr/api/gov24/v3';
 const PER_PAGE = 1000;
 
@@ -92,6 +93,7 @@ export function buildItems(list, conditions, prevFirstSeen, today) {
       dd: parseDeadline(s['신청기한']), // 자르기 전 원문에서 마감일을 찾아요
       url: url === defaultUrl(id) ? '' : url, // 기본 주소는 앱이 만들어요
       org: cut(s['소관기관명'], 40),
+      u: cut(who, 20),
       ot: cut(s['소관기관유형'], 20),
       f: cut(s['서비스분야'], 20),
       views: Number(s['조회수']) || 0,
@@ -99,10 +101,19 @@ export function buildItems(list, conditions, prevFirstSeen, today) {
       c: cond.codes,
       a: cond.age,
     }));
+    // 원문에는 마감일이 없는데 잘린 문구로는 날짜가 잡히면, 없다고 적어둬요
+    const it = items[items.length - 1];
+    if (!it.dd && parseDeadline(it.due)) it.dd = null;
   }
   tagLocalAgencies(items);
   return items;
 }
+
+// 이름만으로는 어느 '광주'인지 알 수 없는 기관 (경기도 광주시 소속으로 확인한 곳만)
+const ORG_REGION = {
+  광주도시관리공사: ['경기', '광주시'],
+  광주시민장학회: ['경기', '광주시'],
+};
 
 // 지방공기업·출연기관은 이름에서 지역을 찾아 rg: [시·도, 시군구]로 저장해요.
 // 실제 시군구 이름 목록은 같은 데이터의 '시군구' 기관에서 모아요 (예: '서울특별시서대문구도시관리공단' → ['서울', '서대문구'])
@@ -120,10 +131,12 @@ export function tagLocalAgencies(items) {
   for (const it of items) {
     if (!/지방공기업|지방출자|출연기관/.test(it.ot || '')) continue;
     const org = String(it.org || '').replace(/^재단법인|^\(재\)|^사단법인/, '').trim();
+    if (ORG_REGION[org]) { it.rg = [...ORG_REGION[org]]; continue; }
     let sido = sidoOf(org);
-    const fits = (n) => !sido || known.get(n).has(sido);
+    // 시군구가 통합 기관('전남광주')으로만 알려져 있어도 '광주…'·'전남…' 기관을 찾을 수 있어요
+    const fits = (n) => !sido || known.get(n).has(sido) || (known.get(n).has('전남광주') && sidoFits('전남광주', [n], sido));
     // 시·도 이름을 뗀 나머지가 '춘천도시공사'처럼 시군구 이름(끝 글자 빼고)으로 시작하는 경우도 찾아요
-    const alias = sido ? SIDO.find((s) => s.name === sido).aliases.find((a) => org.startsWith(a)) : '';
+    const alias = sido ? sidoAliasesOf(sido).find((a) => org.startsWith(a)) : '';
     const rest = org.slice(alias.length).trim();
     const gu = names.find((n) => org.includes(n) && fits(n))
       || names.find((n) => n.length >= 3 && rest.startsWith(n.slice(0, -1)) && fits(n)) || null;
@@ -153,6 +166,65 @@ async function loadPrev() {
   }
 }
 
+// 한 줄에 항목 하나씩, id 순서로 적어요 (바뀐 줄만 git에 남도록)
+export function serializeData(source, items) {
+  const sorted = [...items].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const lines = sorted.map((i) => JSON.stringify(i)).join(',\n');
+  return `{"source":${JSON.stringify(source)},"count":${sorted.length},"items":[\n${lines}\n]}\n`;
+}
+
+async function readText(file) {
+  try { return await readFile(file, 'utf8'); } catch { return null; }
+}
+function parseOr(text, fallback) {
+  try { return text == null ? fallback : JSON.parse(text); } catch { return fallback; }
+}
+
+// benefits.json은 내용이 바뀔 때만 다시 쓰고, 실행 기록은 meta.json에 남겨요.
+// updatedAt: 마지막 실행, changedAt: 항목이 실제로 바뀐 마지막 실행, added/removed: 그 실행에서 늘고 준 개수
+export async function saveData(dir, source, items, now = new Date()) {
+  const file = path.join(dir, 'benefits.json');
+  const metaFile = path.join(dir, 'meta.json');
+  await mkdir(dir, { recursive: true });
+  const prevText = await readText(file);
+  const prev = parseOr(prevText, null); // 옛 형식(updatedAt 포함)도 그대로 읽혀요
+  const prevMeta = parseOr(await readText(metaFile), null);
+
+  const before = new Map((prev?.items || []).map((i) => [i.id, JSON.stringify(i)]));
+  const ids = new Set(items.map((i) => i.id));
+  const added = items.filter((i) => !before.has(i.id)).length;
+  const removed = [...before.keys()].filter((id) => !ids.has(id)).length;
+  const modified = items.filter((i) => before.has(i.id) && before.get(i.id) !== JSON.stringify(i)).length;
+  const changed = !prev || prev.source !== source || added + removed + modified > 0;
+
+  const text = serializeData(source, items);
+  const rewrite = (prevText || '').replace(/\r\n/g, '\n') !== text;
+  if (rewrite) await writeFile(file, text);
+
+  const iso = now.toISOString();
+  const meta = {
+    updatedAt: iso,
+    changedAt: changed ? iso : prevMeta?.changedAt || prev?.updatedAt || iso,
+    added: changed ? added : prevMeta?.added ?? 0,
+    removed: changed ? removed : prevMeta?.removed ?? 0,
+    source,
+    count: items.length,
+  };
+  await writeFile(metaFile, JSON.stringify(meta, null, 1) + '\n');
+  return { total: items.length, added, removed, modified, changed, rewrite, bytes: Buffer.byteLength(text), meta };
+}
+
+// 사용자구분에 실제로 어떤 값이 오는지 보려고 세어요
+function logUserTypes(list) {
+  const counts = new Map();
+  for (const s of list) {
+    const v = String(s['사용자구분'] || '(없음)');
+    counts.set(v, (counts.get(v) || 0) + 1);
+  }
+  const rows = [...counts].sort((a, b) => b[1] - a[1]).map(([v, n]) => `${v}: ${n}`);
+  console.log(`사용자구분 분포 → ${rows.join(', ')}`);
+}
+
 async function main() {
   const key = (process.env.DATA_GO_KR_KEY || '').trim();
   const today = isoDate();
@@ -164,6 +236,11 @@ async function main() {
     source = 'api';
     if (!list.length) throw new Error('서비스 목록이 비어 있어요. 인증키나 활용신청 상태를 확인해 주세요.');
   } else {
+    // 진짜 데이터가 샘플로 덮어써지지 않게 막아요
+    const existing = await loadPrev();
+    if (existing.size) {
+      throw new Error('인증키(DATA_GO_KR_KEY)가 없어요. 이미 받아둔 진짜 데이터를 지키려고 멈췄어요. GitHub Secrets를 확인해 주세요.');
+    }
     console.log('인증키(DATA_GO_KR_KEY)가 없어서 샘플 데이터로 만들어요.');
     const sample = JSON.parse(await readFile(path.join(ROOT, 'test', 'fixtures', 'sample.json'), 'utf8'));
     list = sample.serviceList;
@@ -171,13 +248,12 @@ async function main() {
     source = 'sample';
   }
   const prev = source === 'api' ? await loadPrev() : new Map();
+  logUserTypes(list);
   const items = buildItems(list, conditions, prev, today);
-  await mkdir(path.dirname(OUT), { recursive: true });
-  const out = { updatedAt: new Date().toISOString(), source, count: items.length, items };
-  const json = JSON.stringify(out);
-  await writeFile(OUT, json);
-  const kb = Buffer.byteLength(json) / 1024;
-  console.log(`완료: ${items.length}개 저장 (${source}), 파일 크기 ${kb >= 1024 ? (kb / 1024).toFixed(1) + 'MB' : kb.toFixed(1) + 'KB'}`);
+  const r = await saveData(DATA_DIR, source, items);
+  const kb = r.bytes / 1024;
+  console.log(`전체 ${r.total}개, 새로 ${r.added}개, 빠짐 ${r.removed}개, 내용 바뀜 ${r.modified}개 → ${r.changed ? '변경 있음' : '변경 없음'}`);
+  console.log(`완료 (${source}): benefits.json ${r.rewrite ? '다시 씀' : '그대로 둠'}, 크기 ${kb >= 1024 ? (kb / 1024).toFixed(1) + 'MB' : kb.toFixed(1) + 'KB'}`);
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {

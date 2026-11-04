@@ -44,7 +44,7 @@ jobs:
         run: |
           git config user.name "subsidy-bot"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/benefits.json
+          git add data/
           git diff --cached --quiet || git commit -m "data: $(TZ=Asia/Seoul date +%F) 지원금 갱신"
           git pull --rebase origin main && git push
 

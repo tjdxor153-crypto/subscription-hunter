@@ -408,9 +408,13 @@ document.addEventListener('change', (ev) => {
 
 async function loadData() {
   try {
-    const res = await fetch('data/benefits.json', { cache: 'no-cache' });
+    // meta.json이 없으면(옛 형식) benefits.json 안의 값을 그대로 써요
+    const [res, meta] = await Promise.all([
+      fetch('data/benefits.json', { cache: 'no-cache' }),
+      fetch('data/meta.json', { cache: 'no-cache' }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+    ]);
     if (!res.ok) throw new Error(res.status);
-    data = await res.json();
+    data = { ...(await res.json()), ...(meta || {}) };
     rankedCache = null;
   } catch {
     toast('지원금 데이터를 불러오지 못했어요. 인터넷 연결을 확인해 주세요.');

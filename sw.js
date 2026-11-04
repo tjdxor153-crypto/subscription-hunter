@@ -1,5 +1,5 @@
 // 오프라인에서도 마지막 화면과 데이터를 보여주는 서비스 워커
-const CACHE = 'hunt-v2';
+const CACHE = 'hunt-v3';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'lib/match.js', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {
